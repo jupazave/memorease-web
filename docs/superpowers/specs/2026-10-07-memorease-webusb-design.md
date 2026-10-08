@@ -72,7 +72,7 @@ real se calcula leyendo el descriptor de configuración con un `GET_DESCRIPTOR` 
 3. Reinicio del sensor: SCCB `0x12 = 0x80`, esperar 10 ms.
 4. Leer el ID en SCCB `0x0a` y `0x0b` (cada uno se lee dos veces y vale la segunda). Debe cumplir
    `(id & 0xfff0) == 0x5620`; si no, es un error de dispositivo no soportado.
-5. Tabla del puente `ov562x_init` (13 pares) y tabla del sensor `ov562x_init_2` (100 pares), tal cual
+5. Tabla del puente `ov562x_init` (13 pares) y tabla del sensor `ov562x_init_2` (99 pares), tal cual
    están en el driver de Linux.
 6. `0xe0 = 0x00`.
 
@@ -106,16 +106,14 @@ la convención de OmniVision, y no se han probado todavía:
 La primera tarea de implementación que toque el sensor los verifica con el arnés de hardware:
 
 - El objetivo de exposición funciona si bajar `n` reduce el nivel medio del cuadro crudo.
-- Un bit de `0x13` funciona si, al apagarlo, un valor escrito a mano en el registro correspondiente
-  (`0x10` exposición, `0x00` ganancia, `0x01` y `0x02` ganancias de azul y rojo) se conserva y cambia
-  el cuadro.
+- El congelado funciona si, con `0x13 = 0xc0`, mover el objetivo de exposición ya no cambia el nivel
+  medio y los registros de ganancia de azul y rojo (`0x01` y `0x02`) se quedan fijos.
 
 Si un control no pasa su verificación, se documenta en el README y la app se degrada así, sin que el
 resto dependa de él:
 
 - Objetivo de exposición: se quita el deslizador.
-- Bit de balance de blancos: el sensor se queda con su balance automático.
-- Bits de exposición y ganancia: **Fijar** congela solo los niveles del revelado.
+- Congelado: **Fijar** congela solo los niveles del revelado.
 
 ## Flujo de uso
 
@@ -165,6 +163,7 @@ La latencia queda entre 0.5 y 1 s. Los disparos que llegan con una captura en cu
   espacios al inicio ni al final.
 - El número siguiente es el mayor que exista en la subcarpeta más uno, empezando en 1, con cuatro
   dígitos. Se recalcula al conectar la carpeta y al cambiar de rollo. Nunca se sobrescribe un archivo.
+- La subcarpeta se crea al guardar la primera foto, no al escribir el nombre del rollo.
 
 **Escritura.** Primero el DNG y luego el JPEG. Si alguno falla, se borra el que sí se escribió, se
 muestra el error y el contador no avanza.
@@ -207,7 +206,8 @@ columna impar.
 
 - Vista previa: cada celda de 2×2 da un píxel, con el verde como promedio de los dos. Resultado de
   1296×840.
-- Captura: bilineal a resolución completa, replicando en los bordes.
+- Captura: bilineal a resolución completa, reflejando en los bordes para conservar la fase del
+  mosaico.
 
 **Niveles.** Por canal se calcula el histograma sobre la imagen de media resolución, ignorando un 5 %
 de margen por lado. `lo` es el percentil 0.5 y `hi` el 99.5, con una separación mínima de 8.
@@ -223,12 +223,13 @@ de margen por lado. `lo` es el percentil 0.5 y `hi` el 99.5, con una separación
 Los percentiles, el margen y `TONO` son constantes con nombre en un solo módulo. El color automático es
 aproximado por diseño; el DNG es el camino para color fino.
 
-**Automático y fijo.** Por defecto los niveles se recalculan en cada cuadro y el sensor ajusta
-exposición y ganancia solo. El balance de blancos automático del sensor se apaga siempre, porque
-persigue la máscara naranja y cambia de un cuadro a otro; el balance lo hace el revelado.
-**Fijar exposición y color** congela los niveles del cuadro actual y apaga exposición y ganancia
-automáticas del sensor, de modo que todo el rollo salga con el mismo tratamiento. Se suelta con el
-mismo botón, o al cambiar de tipo de película.
+**Automático y fijo.** Por defecto los niveles se recalculan en cada cuadro y el sensor ajusta solo
+exposición, ganancia y balance de blancos. Ese balance automático no estorba mientras no se fije: la
+normalización por canal es inmune a las ganancias por canal, y el balance ayuda a aprovechar el rango
+de 8 bits. **Fijar exposición y color** congela los niveles del cuadro actual y apaga los tres modos
+automáticos del sensor (`0x13 = 0xc0`), de modo que todo el rollo salga con el mismo tratamiento. Se
+suelta con el mismo botón (`0x13 = 0xc7`), o al cambiar de tipo de película. Mientras está fijo, el
+deslizador de exposición se deshabilita.
 
 **Exposición.** El deslizador mueve el objetivo de exposición automática. Sirve para bajar la exposición
 cuando la base de la película satura: en el cuadro de prueba el rojo saturó en 3.1 % de los píxeles y
@@ -245,17 +246,24 @@ ligado al origen.
 
 | Módulo | Responsabilidad | Depende de |
 |---|---|---|
+| `frame` | Constantes de geometría del cuadro | nada |
 | `device/registers` | Lectura y escritura de registros del puente y del sensor | `USBDevice` |
 | `device/tables` | Tablas de inicialización | nada |
-| `device/frames` | Armado de cuadros a partir de cargas. Lógica pura | nada |
+| `device/frames` | Armado de cuadros a partir de cargas. Lógica pura | `frame` |
 | `device/button` | Decodificar reportes del botón. Lógica pura | nada |
+| `device/descriptor` | Tamaño real del paquete isócrono a partir del descriptor. Lógica pura | nada |
+| `device/sensor-control` | Valores de registro para exposición y congelado. Lógica pura | nada |
 | `device/scanner` | Conectar, inicializar, stream, botón, control del sensor. Emite cuadros y pulsaciones | los anteriores |
 | `image/demosaic` | Media resolución y bilineal. Lógica pura | nada |
 | `image/develop` | Niveles, modos de película, orientación. Lógica pura | nada |
 | `image/dng` | Escritor de DNG. Lógica pura | nada |
-| `image/worker` | Ejecuta demosaico, revelado y codificación JPEG fuera del hilo principal | `image/*` |
+| `image/pipeline` | Encadena demosaico, niveles y revelado para vista previa y captura. Lógica pura | `frame`, `image/*` |
+| `image/worker` | Ejecuta el pipeline y la codificación JPEG fuera del hilo principal | `image/*` |
+| `image/client` | Interfaz de promesas hacia el worker; descarta vistas previas si está ocupado | `image/worker` |
 | `storage/naming` | Validar rollo y calcular el siguiente número. Lógica pura | nada |
 | `storage/folder` | Carpeta persistida, permisos, escribir y borrar | `storage/naming` |
+| `ui/settings` | Ajustes recordados en `localStorage` | `storage/naming` |
+| `ui/view` | Construye el DOM de la pantalla | nada |
 | `ui/app` | Estado de la pantalla y cableado entre módulos | todos |
 
 **Flujo de datos.** `scanner` entrega cada cuadro como `Uint8Array` con el instante de inicio. `app` lo
@@ -267,7 +275,8 @@ captura devuelve el JPEG, el DNG y una miniatura, y `app` los pasa a `folder`.
 
 - **Navegador sin WebUSB:** mensaje fijo que pide Chrome, Edge o Chromium.
 - **Sensor inesperado o fallo de inicialización:** estado de error con el detalle y botón de reintentar.
-- **Cable desconectado o transferencia fallida:** se detiene el stream y se pasa a desconectado.
+- **Cable desconectado:** se detiene el stream y se pasa a desconectado.
+- **Transferencia fallida con el aparato aún conectado:** estado de error con botón de reintentar.
 - **Tres segundos sin cuadros completos:** se reinicia el stream una vez (alt 0 y de nuevo alt 1); si
   sigue sin cuadros, estado de error.
 - **Carpeta sin permiso:** Capturar se deshabilita y se muestra el botón para reactivar el permiso.
