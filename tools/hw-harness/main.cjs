@@ -21,7 +21,7 @@ app.whenReady().then(async () => {
   });
 
   // Hidden windows throttle timers; the register protocol depends on 20 ms sleeps.
-  const win = new BrowserWindow({ show: false, webPreferences: { backgroundThrottling: false } });
+  const win = new BrowserWindow({ show: false, width: 1280, height: 800, webPreferences: { backgroundThrottling: false } });
   win.webContents.on('console-message', (event) => {
     if (event.level === 'error') console.log('[console]', event.message);
   });
@@ -36,9 +36,12 @@ app.whenReady().then(async () => {
   if (!result) result = { done: true, ok: false, log: ['timeout: the page never reported a result'], files: {} };
 
   for (const line of result.log) console.log(line);
+  fs.mkdirSync(outDir, { recursive: true });
   for (const [name, base64] of Object.entries(result.files || {})) {
-    fs.mkdirSync(outDir, { recursive: true });
     fs.writeFileSync(path.join(outDir, path.basename(name)), Buffer.from(base64, 'base64'));
+  }
+  if (process.env.HW_SCREENSHOT) {
+    fs.writeFileSync(path.join(outDir, process.env.HW_SCREENSHOT), (await win.webContents.capturePage()).toPNG());
   }
   app.exit(result.ok ? 0 : 1);
 });

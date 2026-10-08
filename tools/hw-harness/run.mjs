@@ -38,7 +38,7 @@ const env = {
   ...process.env,
   HW_URL: scenario === 'app' ? `http://localhost:${PORT}/` : `http://localhost:${PORT}/tools/hw-harness/page.html#${scenario}`,
   HW_OUT: path.join(here, 'out'),
-  ...(scenario === 'app' ? { HW_POLL: APP_POLL } : {}),
+  ...(scenario === 'app' ? { HW_POLL: APP_POLL, HW_SCREENSHOT: 'app.png' } : {}),
 };
 // require('electron') from Node resolves to the path of the Electron binary.
 const electron = createRequire(import.meta.url)('electron');
