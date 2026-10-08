@@ -1,0 +1,4 @@
+node_modules/
+dist/
+# prueba de factibilidad desechable; out/ contiene fotos personales
+spike/
