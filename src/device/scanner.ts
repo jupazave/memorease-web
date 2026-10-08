@@ -5,6 +5,7 @@ import { ButtonDecoder } from './button';
 import { isoBytesPerMicroframe } from './descriptor';
 import { FrameAssembler, splitPayloads, type Frame } from './frames';
 import { REG_SENSOR_ADDRESS, Registers, sleep } from './registers';
+import { COM8, COM8_AUTO, COM8_FROZEN, exposureTargetRegisters } from './sensor-control';
 import { OV562X_BRIDGE_INIT, OV562X_SENSOR_INIT } from './tables';
 
 export const VENDOR_ID = 0x05a9;
@@ -20,6 +21,13 @@ const PACKETS_PER_TRANSFER = 32;
 const STALL_MS = 3000;
 const BUTTON_RETRY_MS = 200;
 
+/**
+ * Which sensor controls this scanner honours, as measured by `npm run hw -- sensor`.
+ * When exposureTarget is false the UI hides the exposure slider; when freeze is false,
+ * locking only freezes the development levels.
+ */
+export const SENSOR_CAPS: { exposureTarget: boolean; freeze: boolean } = { exposureTarget: true, freeze: true };
+
 export interface ScannerEvents {
   onFrame(frame: Frame): void;
   onButton(): void;
@@ -34,6 +42,7 @@ export class Scanner {
   /** Identity of the running stream; replaced on every start, cleared on stop. */
   private session: object | null = null;
   private loop: Promise<void> = Promise.resolve();
+  private sensorQueue: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly dev: USBDevice,
@@ -97,6 +106,27 @@ export class Scanner {
     } finally {
       await this.dev.close().catch(() => {});
     }
+  }
+
+  /** Moves the auto-exposure target. `n` runs from -90 to 90; 0 is the default. */
+  setExposureTarget(n: number): Promise<void> {
+    return this.sensor(() => this.regs.sensorWriteAll(exposureTargetRegisters(n)));
+  }
+
+  /** `false` freezes exposure, gain and white balance at their current values. */
+  setAutoModes(on: boolean): Promise<void> {
+    return this.sensor(() => this.regs.sensorWrite(COM8, on ? COM8_AUTO : COM8_FROZEN));
+  }
+
+  sensorRead(reg: number): Promise<number> {
+    return this.sensor(() => this.regs.sensorRead(reg));
+  }
+
+  /** Serialises sensor access: an SCCB exchange is several bridge writes that must not interleave. */
+  private sensor<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.sensorQueue.then(operation, operation);
+    this.sensorQueue = run.catch(() => {});
+    return run;
   }
 
   private async configDescriptor(): Promise<Uint8Array> {
