@@ -14,6 +14,7 @@ export type Scenario = (ctx: HwContext) => Promise<void>;
 const scenarios: Record<string, () => Promise<{ default: Scenario }>> = {
   stream: () => import('./stream'),
   sensor: () => import('./sensor'),
+  capture: () => import('./capture'),
 };
 
 interface HwResult {
