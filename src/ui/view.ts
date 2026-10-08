@@ -38,6 +38,11 @@ const TEMPLATE = `
       <input id="exposure" type="range" min="-90" max="90" step="5">
     </label>
     <button id="lock" type="button" aria-pressed="false">Fijar exposición y color</button>
+
+    <h2>Lámpara</h2>
+    <button id="calibrate" type="button">Calibrar luz</button>
+    <p id="flat-status" class="hint"></p>
+    <button id="flat-clear" type="button" hidden>Quitar calibración</button>
     </div>
 
     <div class="capture-bar">
@@ -71,6 +76,9 @@ export interface View {
   exposure: HTMLInputElement;
   exposureValue: HTMLElement;
   lock: HTMLButtonElement;
+  calibrate: HTMLButtonElement;
+  flatStatus: HTMLElement;
+  flatClear: HTMLButtonElement;
   capture: HTMLButtonElement;
   undo: HTMLButtonElement;
   nextName: HTMLElement;
@@ -103,6 +111,9 @@ export function createView(root: HTMLElement): View {
     exposure: find('#exposure'),
     exposureValue: find('#exposure-value'),
     lock: find('#lock'),
+    calibrate: find('#calibrate'),
+    flatStatus: find('#flat-status'),
+    flatClear: find('#flat-clear'),
     capture: find('#capture'),
     undo: find('#undo'),
     nextName: find('#next-name'),

@@ -1,5 +1,6 @@
 // Destination folder: remembered across sessions with IndexedDB, written with the File System
 // Access API. Captures of a roll go to <base>/<roll>/<roll>_<index>.{dng,jpg}.
+import { dbGet, dbPut } from './db';
 import { fileBase, nextIndex } from './naming';
 
 export interface WritableLike {
@@ -79,51 +80,17 @@ export class RollFolder {
   }
 }
 
-const DB_NAME = 'memorease';
-const STORE = 'handles';
-const KEY = 'baseDir';
-
-function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
-    request.onupgradeneeded = () => request.result.createObjectStore(STORE);
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
+const FOLDER_KEY = 'baseDir';
 
 /** The folder chosen in an earlier session, or null. Its permission may need to be requested again. */
-export async function loadSavedFolder(): Promise<FileSystemDirectoryHandle | null> {
-  const db = await openDb();
-  try {
-    return await new Promise((resolve, reject) => {
-      const request = db.transaction(STORE).objectStore(STORE).get(KEY);
-      request.onsuccess = () => resolve((request.result as FileSystemDirectoryHandle | undefined) ?? null);
-      request.onerror = () => reject(request.error);
-    });
-  } finally {
-    db.close();
-  }
-}
-
-async function saveFolder(handle: FileSystemDirectoryHandle): Promise<void> {
-  const db = await openDb();
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(STORE, 'readwrite');
-      tx.objectStore(STORE).put(handle, KEY);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-  } finally {
-    db.close();
-  }
+export function loadSavedFolder(): Promise<FileSystemDirectoryHandle | null> {
+  return dbGet<FileSystemDirectoryHandle>(FOLDER_KEY);
 }
 
 /** Opens the system folder picker and remembers the choice. Rejects when the user cancels. */
 export async function pickFolder(): Promise<FileSystemDirectoryHandle> {
   const handle = await window.showDirectoryPicker({ id: 'memorease', mode: 'readwrite' });
-  await saveFolder(handle);
+  await dbPut(FOLDER_KEY, handle);
   return handle;
 }
 

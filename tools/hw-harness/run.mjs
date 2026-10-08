@@ -1,6 +1,6 @@
 // Runs one hardware scenario: starts Vite on port 5174, opens the page in Electron with the scanner
 // pre-authorised, prints the scenario log and exits 0 on success.
-// Usage: npm run hw -- <stream|sensor|capture|app>
+// Usage: npm run hw -- <stream|sensor|capture|flat|app>
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -11,7 +11,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../..');
 const scenario = process.argv[2];
 if (!scenario) {
-  console.error('usage: npm run hw -- <stream|sensor|capture|app>');
+  console.error('usage: npm run hw -- <stream|sensor|capture|flat|app>');
   process.exit(2);
 }
 

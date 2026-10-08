@@ -40,6 +40,18 @@ negativo y se invierte ahí. El color automático del JPEG es aproximado: para c
 Si la vista previa avisa de zonas saturadas, baja la exposición: la base de la película está
 quemando el sensor y se pierde detalle en las sombras.
 
+## Calibrar la luz
+
+La lámpara del escáner no ilumina parejo. En el aparato con que se desarrolló esto, el brillo cambia
+unos 25 puntos porcentuales de un lado al otro del cuadro y el balance de color cerca de 10 %.
+
+Con el escáner vacío, sin película ni portanegativos, pulsa **Calibrar luz**. La app promedia cuatro
+cuadros en blanco, guarda una referencia y a partir de ahí corrige con ella la vista previa y los JPEG.
+El DNG conserva los datos del sensor tal cual. La referencia se recuerda entre sesiones; **Quitar
+calibración** la descarta.
+
+La corrección es suave a propósito y no quita el polvo: los puntos se limpian con una perilla de aire.
+
 ## Problemas conocidos
 
 - **El selector de dispositivos sale vacío.** Si otro programa tocó el escáner mientras el navegador
@@ -58,11 +70,12 @@ quemando el sensor y se pierde detalle en las sombras.
 npm test                 # pruebas unitarias
 npm run typecheck
 npm run build            # página estática en dist/
-npm run hw -- stream     # pruebas con el aparato conectado: stream, sensor, capture, app
+npm run hw -- stream     # pruebas con el aparato conectado: stream, sensor, capture, flat, app
 ```
 
 Las pruebas con el aparato corren la página dentro de Electron, que se concede el permiso USB sin
-mostrar el selector. Dejan sus archivos en `tools/hw-harness/out/`.
+mostrar el selector. Dejan sus archivos en `tools/hw-harness/out/`. El escenario `flat` necesita el
+escáner vacío.
 
 El diseño está en `docs/superpowers/specs/2026-10-07-memorease-webusb-design.md`.
 

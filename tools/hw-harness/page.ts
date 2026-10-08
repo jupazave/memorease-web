@@ -15,6 +15,7 @@ const scenarios: Record<string, () => Promise<{ default: Scenario }>> = {
   stream: () => import('./stream'),
   sensor: () => import('./sensor'),
   capture: () => import('./capture'),
+  flat: () => import('./flat'),
 };
 
 interface HwResult {

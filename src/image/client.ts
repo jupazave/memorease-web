@@ -1,5 +1,6 @@
 // Promise interface to the development worker.
 import type { Levels } from './develop';
+import type { FlatCalibration } from './flatfield';
 import type { DevelopParams } from './pipeline';
 import type { WorkerRequest, WorkerResponse } from './worker';
 
@@ -45,7 +46,7 @@ export class DevelopClient {
     if (this.previewBusy) return null;
     this.previewBusy = true;
     try {
-      const response = await this.send('preview', raw, params);
+      const response = await this.send({ id: this.nextId++, kind: 'preview', raw, params }, [raw.buffer]);
       if (response.kind !== 'preview') throw new Error('unexpected worker reply');
       return { bitmap: response.bitmap, levels: response.levels, clipped: response.clipped };
     } finally {
@@ -55,16 +56,31 @@ export class DevelopClient {
 
   /** Full-resolution JPEG, DNG and thumbnail. */
   async capture(raw: Uint8Array<ArrayBuffer>, params: DevelopParams): Promise<CaptureOutput> {
-    const response = await this.send('capture', raw, params);
+    const response = await this.send({ id: this.nextId++, kind: 'capture', raw, params }, [raw.buffer]);
     if (response.kind !== 'capture') throw new Error('unexpected worker reply');
     return { jpeg: response.jpeg, dng: response.dng, thumbnail: response.thumbnail, levels: response.levels };
   }
 
-  private send(kind: WorkerRequest['kind'], raw: Uint8Array<ArrayBuffer>, params: DevelopParams): Promise<WorkerResponse> {
-    const request: WorkerRequest = { id: this.nextId++, kind, raw, params };
+  /** Turns blank frames into a lamp reference. It is not applied until setFlat() is called with it. */
+  async calibrate(frames: Uint8Array<ArrayBuffer>[]): Promise<FlatCalibration> {
+    const response = await this.send(
+      { id: this.nextId++, kind: 'calibrate', frames },
+      frames.map((frame) => frame.buffer),
+    );
+    if (response.kind !== 'calibrate') throw new Error('unexpected worker reply');
+    return response.calibration;
+  }
+
+  /** Corrects every following preview and capture with this reference; null turns the correction off. */
+  async setFlat(calibration: FlatCalibration | null): Promise<void> {
+    const response = await this.send({ id: this.nextId++, kind: 'flat', calibration }, []);
+    if (response.kind !== 'flat') throw new Error('unexpected worker reply');
+  }
+
+  private send(request: WorkerRequest, transfer: Transferable[]): Promise<WorkerResponse> {
     return new Promise((resolve, reject) => {
       this.waiting.set(request.id, { resolve, reject });
-      this.worker.postMessage(request, [raw.buffer]);
+      this.worker.postMessage(request, transfer);
     });
   }
 }

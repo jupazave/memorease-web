@@ -238,6 +238,23 @@ el verde en 1.8 %.
 **Orientación.** Rotar 180° y espejo horizontal, aplicados al JPEG y a la vista previa. En el DNG van
 solo en la etiqueta de orientación.
 
+**Calibración de luz** (agregada el 2026-10-08, tras medir un cuadro en blanco). La lámpara no ilumina
+parejo: en una rejilla de 8×6 el brillo va de 87 % a 112 % del promedio y el balance rojo/azul cambia
+cerca de 10 % de un lado al otro. Se corrige con una referencia de campo plano:
+
+- **Calibrar luz** se usa con el escáner vacío. Promedia 4 cuadros crudos y guarda, por canal, la
+  media de cada celda de una rejilla de 24 píxeles de media resolución (54×35 celdas).
+- La ganancia de cada muestra es la celda más tenue de su canal entre el valor interpolado
+  bilinealmente en ese punto. Nunca pasa de 1, así que la corrección no puede saturar nada.
+- Se aplica al mosaico crudo antes del demosaico, para la vista previa y el JPEG. El DNG no se toca.
+  El aviso de saturación se sigue midiendo sobre los datos del sensor sin corregir.
+- La referencia se rechaza si casi no hay luz (media de un canal bajo 30), si más de 0.1 % de las
+  muestras están saturadas, o si en algún canal la celda más tenue es menos de 0.55 de la más
+  brillante. Medido en el aparato: de 0.67 a 0.75 vacío, de 0.19 a 0.46 con un negativo puesto.
+- Se guarda en IndexedDB y se recuerda entre sesiones. Calibrar o quitar la calibración suelta
+  **Fijar**, porque los niveles fijados ya no corresponden.
+- La rejilla es gruesa a propósito: corrige la lámpara sin agregar ruido, y no quita polvo.
+
 ## Arquitectura
 
 Página estática en TypeScript con Vite, sin framework de interfaz y sin dependencias en tiempo de
@@ -257,11 +274,13 @@ ligado al origen.
 | `image/demosaic` | Media resolución y bilineal. Lógica pura | nada |
 | `image/develop` | Niveles, modos de película, orientación. Lógica pura | nada |
 | `image/dng` | Escritor de DNG. Lógica pura | nada |
+| `image/flatfield` | Referencia de la lámpara, validación y corrección del mosaico. Lógica pura | nada |
 | `image/pipeline` | Encadena demosaico, niveles y revelado para vista previa y captura. Lógica pura | `frame`, `image/*` |
 | `image/worker` | Ejecuta el pipeline y la codificación JPEG fuera del hilo principal | `image/*` |
 | `image/client` | Interfaz de promesas hacia el worker; descarta vistas previas si está ocupado | `image/worker` |
 | `storage/naming` | Validar rollo y calcular el siguiente número. Lógica pura | nada |
-| `storage/folder` | Carpeta persistida, permisos, escribir y borrar | `storage/naming` |
+| `storage/db` | Almacén clave-valor en IndexedDB para la carpeta y la referencia de la lámpara | nada |
+| `storage/folder` | Carpeta persistida, permisos, escribir y borrar | `storage/naming`, `storage/db` |
 | `ui/settings` | Ajustes recordados en `localStorage` | `storage/naming` |
 | `ui/view` | Construye el DOM de la pantalla | nada |
 | `ui/app` | Estado de la pantalla y cableado entre módulos | todos |
@@ -296,6 +315,8 @@ enumeraba, el selector sale vacío hasta reiniciar Chromium por completo.
 - `develop`: percentiles con margen; un gris visto a través de una máscara naranja sintética sale
   neutro en negativo color; la salida es monótona; los tres modos; las cuatro orientaciones.
 - `dng`: releer el IFD y comprobar etiquetas, desplazamiento y tamaño de los datos.
+- `flatfield`: medias por celda; un cuadro en blanco con gradiente queda parejo tras corregirse con
+  su propia referencia; las ganancias nunca pasan de 1; los tres motivos de rechazo.
 - `naming`: validación del rollo y siguiente número con carpeta vacía, con huecos y con archivos ajenos.
 
 **Con el aparato.** Un arnés de Electron en `tools/hw-harness/` que se concede el permiso USB sin

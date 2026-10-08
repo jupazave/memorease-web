@@ -1,9 +1,12 @@
 // Screen controller: owns the state and wires the scanner, the development worker and the folder.
 import type { Frame } from '../device/frames';
 import { Scanner, SENSOR_CAPS } from '../device/scanner';
+import { FRAME_HEIGHT, FRAME_WIDTH } from '../frame';
 import { DevelopClient } from '../image/client';
 import { CLIP_WARN_FRACTION, type FilmType, type Levels } from '../image/develop';
+import { checkCalibration, FLAT_FRAMES, type FlatCalibration, type FlatProblem } from '../image/flatfield';
 import type { DevelopParams } from '../image/pipeline';
+import { dbDelete, dbGet, dbPut } from '../storage/db';
 import { canWrite, loadSavedFolder, pickFolder, requestWrite, RollFolder } from '../storage/folder';
 import { isValidRoll } from '../storage/naming';
 import { loadSettings, saveSettings, type Settings } from './settings';
@@ -18,6 +21,14 @@ const STATUS_TEXT: Record<Status, string> = {
   live: 'En vivo.',
   capturing: 'Capturando…',
   error: 'Error del escáner.',
+};
+
+const FLAT_KEY = 'flat';
+
+const FLAT_PROBLEM_TEXT: Record<FlatProblem, string> = {
+  dark: 'Casi no llega luz al sensor. Revisa que el escáner esté vacío y vuelve a calibrar.',
+  saturated: 'La luz satura el sensor. Baja la exposición y vuelve a calibrar.',
+  uneven: 'Parece que hay película puesta: la luz no es pareja. Vacía el escáner y vuelve a calibrar.',
 };
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -40,6 +51,11 @@ export class App {
   private lastLevels: Levels | null = null;
   private lockedLevels: Levels | null = null;
   private captureRequestedAt: number | null = null;
+  /** The lamp reference in use, if any. */
+  private flat: FlatCalibration | null = null;
+  /** Blank frames being collected for a new lamp reference. */
+  private flatFrames: { since: number; frames: Uint8Array<ArrayBuffer>[] } | null = null;
+  private calibrating = false;
 
   constructor(root: HTMLElement) {
     this.view = createView(root);
@@ -58,6 +74,7 @@ export class App {
       if (event.device === this.device) void this.onUnplugged();
     });
     await this.restoreFolder();
+    await this.restoreFlat();
     const device = await Scanner.findGranted();
     if (device) await this.connect(device);
   }
@@ -96,6 +113,8 @@ export class App {
     this.captureRequestedAt = null;
     this.lastLevels = null;
     this.lockedLevels = null;
+    this.flatFrames = null;
+    this.calibrating = false;
     if (scanner) await scanner.close().catch(() => {});
   }
 
@@ -123,6 +142,14 @@ export class App {
 
   private async onFrame(frame: Frame): Promise<void> {
     if (!this.scanner) return;
+    const collecting = this.flatFrames;
+    if (collecting && frame.startedAt >= collecting.since) {
+      collecting.frames.push(frame.data);
+      if (collecting.frames.length < FLAT_FRAMES) return;
+      this.flatFrames = null;
+      await this.finishCalibration(collecting.frames);
+      return;
+    }
     const params = this.params();
     // Only a frame that started after the trigger is captured, so the film was already still.
     if (this.captureRequestedAt !== null && frame.startedAt >= this.captureRequestedAt) {
@@ -157,7 +184,7 @@ export class App {
   // ---- capture ----
 
   private canCapture(): boolean {
-    return this.status === 'live' && this.baseWritable && this.rollFolder !== null;
+    return this.status === 'live' && !this.calibrating && this.baseWritable && this.rollFolder !== null;
   }
 
   private requestCapture(): void {
@@ -240,6 +267,62 @@ export class App {
     await this.unlock();
   }
 
+  // ---- lamp calibration ----
+
+  private async restoreFlat(): Promise<void> {
+    const saved = await dbGet<FlatCalibration>(FLAT_KEY).catch(() => null);
+    if (!saved || saved.width !== FRAME_WIDTH || saved.height !== FRAME_HEIGHT) return;
+    await this.client.setFlat(saved);
+    this.flat = saved;
+    this.render();
+  }
+
+  /** Starts collecting blank frames; onFrame() finishes the job. */
+  private onCalibrateClick(): void {
+    if (this.status !== 'live' || this.calibrating) return;
+    this.calibrating = true;
+    this.message = null;
+    this.flatFrames = { since: performance.now(), frames: [] };
+    this.render();
+  }
+
+  private async finishCalibration(frames: Uint8Array<ArrayBuffer>[]): Promise<void> {
+    try {
+      const calibration = await this.client.calibrate(frames);
+      const problem = checkCalibration(calibration);
+      if (problem) {
+        this.message = FLAT_PROBLEM_TEXT[problem];
+        return;
+      }
+      // Levels locked under the previous correction no longer match.
+      await this.unlock();
+      await this.client.setFlat(calibration);
+      this.flat = calibration;
+      this.message = null;
+      await dbPut(FLAT_KEY, calibration).catch(() => {
+        this.message = 'La calibración se aplicó, pero no se pudo guardar: se perderá al recargar.';
+      });
+    } catch (error) {
+      this.message = `No se pudo calibrar la luz: ${messageOf(error)}`;
+    } finally {
+      this.calibrating = false;
+      this.render();
+    }
+  }
+
+  private async onFlatClearClick(): Promise<void> {
+    if (!this.flat || this.calibrating) return;
+    try {
+      await this.unlock();
+      await this.client.setFlat(null);
+      this.flat = null;
+      await dbDelete(FLAT_KEY);
+    } catch (error) {
+      this.report(error);
+    }
+    this.render();
+  }
+
   // ---- folder ----
 
   private async restoreFolder(): Promise<void> {
@@ -314,6 +397,8 @@ export class App {
     });
     v.exposure.addEventListener('change', () => void this.onExposureChange(Number(v.exposure.value)));
     v.lock.addEventListener('click', () => void this.toggleLock());
+    v.calibrate.addEventListener('click', () => this.onCalibrateClick());
+    v.flatClear.addEventListener('click', () => void this.onFlatClearClick());
     v.capture.addEventListener('click', () => this.requestCapture());
     v.undo.addEventListener('click', () => void this.undo());
     window.addEventListener('keydown', (event) => this.onKeyDown(event));
@@ -360,9 +445,16 @@ export class App {
     v.exposureRow.hidden = !SENSOR_CAPS.exposureTarget;
     v.exposure.disabled = !streaming || (SENSOR_CAPS.freeze && locked);
     v.exposureValue.textContent = v.exposure.value;
-    v.lock.disabled = this.status !== 'live' || (!locked && !this.lastLevels);
+    v.lock.disabled = this.status !== 'live' || this.calibrating || (!locked && !this.lastLevels);
     v.lock.setAttribute('aria-pressed', String(locked));
     v.lock.textContent = locked ? 'Soltar exposición y color' : 'Fijar exposición y color';
+    v.calibrate.disabled = this.status !== 'live' || this.calibrating;
+    v.calibrate.textContent = this.calibrating ? 'Calibrando…' : this.flat ? 'Volver a calibrar luz' : 'Calibrar luz';
+    v.flatStatus.textContent = this.flat
+      ? `Luz calibrada el ${new Date(this.flat.createdAt).toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' })}.`
+      : 'Sin calibrar. Hazlo con el escáner vacío, sin película ni portanegativos.';
+    v.flatClear.hidden = !this.flat;
+    v.flatClear.disabled = this.calibrating;
     v.capture.disabled = !this.canCapture();
     v.undo.disabled = this.status === 'capturing' || !this.rollFolder?.canUndo;
     v.nextName.textContent = this.rollFolder ? `Siguiente: ${this.rollFolder.nextName}` : '';
