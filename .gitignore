@@ -1,4 +1,5 @@
 node_modules/
 dist/
+tools/hw-harness/out/
 # prueba de factibilidad desechable; out/ contiene fotos personales
 spike/
